@@ -1,0 +1,58 @@
+{
+  "name": "@regenic/dingtalk-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DingTalk chat connector for Regenic. Stream-mode robot ingest and OpenAPI replies.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/regenic-ai/dingtalk-connector.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "regenic": {
+    "plugin": true,
+    "catalogOrder": 35,
+    "id": "@regenic/dingtalk-connector",
+    "displayName": "DingTalk",
+    "engines": {
+      "regenic": "1.0"
+    },
+    "contributes": {
+      "drivers": [
+        "dingtalkChatDriver"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "link-regenic": "node scripts/link-regenic.mjs --required",
+    "pretest": "node scripts/link-regenic.mjs --required",
+    "test": "tsc -p tsconfig.json && node --test test/*.test.cjs",
+    "typecheck": "node scripts/link-regenic.mjs --required && tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "dingtalk-stream": "2.1.6-beta.1"
+  },
+  "peerDependencies": {
+    "@regenic/connector-contract": ">=0.1.0",
+    "@regenic/plugin-host": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
