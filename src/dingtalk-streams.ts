@@ -27,7 +27,7 @@ export function createDingTalkStreams(
   installation: Pick<ConnectorInstallation, "id" | "org_id">,
   conversations: DingTalkConversation[],
   client: DingTalkImClient,
-  pageSize?: number,
+  _pageSize?: number,
   now?: () => string,
 ): ConnectorStream[] {
   return conversations.map((conversation) => ({
@@ -42,7 +42,6 @@ export function createDingTalkStreams(
       conversation_name: conversation.name,
       chat_mode: conversation.chat_mode,
       peer_user_id: conversation.peer_user_id,
-      page_size: pageSize,
       now,
     }),
   }));

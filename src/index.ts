@@ -2,31 +2,31 @@ export {
   DINGTALK_SOURCE,
   dingtalkConversationKind,
   dingtalkSentMessageId,
-  messageCursor,
-  parseRobotCallback,
 } from "./dingtalk-message";
 export type {
   DingTalkChatMode,
   DingTalkConversation,
   DingTalkInboundMessage,
+  DingTalkResourceRef,
 } from "./dingtalk-message";
-export { DingTalkApiError, DingTalkOpenApi } from "./dingtalk-openapi";
-export type { DingTalkCredentials, DingTalkFetch } from "./dingtalk-openapi";
+export { DingTalkCliError } from "./dingtalk-cli";
 export {
-  DingTalkAppClient,
-  acceptStreamMessage,
-  dingtalkClientFor,
-  disconnectDingTalkClients,
-  resetDingTalkClientsForTests,
-  setDingTalkClientForTests,
+  DINGTALK_PAGE_SIZE,
+  DwsCliClient,
+  dwsClientFor,
+  messageFromCli,
+  millisToIso,
+  probeDwsAuth,
+  resetDwsClientsForTests,
+  setDwsRunOptionsForTests,
+  timeToMillis,
 } from "./dingtalk-client";
-export type { DingTalkImClient } from "./dingtalk-client";
-export {
-  acceptRobotPayload,
-  clearAllDingTalkInboxes,
-  clearDingTalkInboxForTests,
-  setDingTalkInboxRootForTests,
-} from "./dingtalk-inbox";
+export type {
+  DingTalkHistoryPage,
+  DingTalkHistoryRequest,
+  DingTalkImClient,
+  DingTalkSendResult,
+} from "./dingtalk-client";
 export { DingTalkChatPollConnector } from "./dingtalk-chat-poll-connector";
 export { DingTalkChatEgress, textFromContentParts } from "./dingtalk-chat-egress";
 export { dingtalkChatDriver } from "./dingtalk-chat-driver";

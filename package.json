@@ -2,7 +2,7 @@
   "name": "@regenic/dingtalk-connector",
   "version": "0.1.0",
   "private": true,
-  "description": "DingTalk chat connector for Regenic. Stream-mode robot ingest and OpenAPI replies.",
+  "description": "DingTalk chat connector for Regenic. User-level history and replies through dws.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -43,9 +43,6 @@
     "pretest": "node scripts/link-regenic.mjs --required",
     "test": "tsc -p tsconfig.json && node --test test/*.test.cjs",
     "typecheck": "node scripts/link-regenic.mjs --required && tsc -p tsconfig.json --noEmit"
-  },
-  "dependencies": {
-    "dingtalk-stream": "2.1.6-beta.1"
   },
   "peerDependencies": {
     "@regenic/connector-contract": ">=0.1.0",

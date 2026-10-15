@@ -66,19 +66,8 @@ export function dingtalkKinds(config: Record<string, unknown>): DingTalkChatMode
 export function dingtalkInstallConfig(
   input: Record<string, unknown>,
 ): Record<string, JsonValue> {
-  const clientId = configString(input, "client_id");
-  if (!clientId) {
-    throw new ChannelDriverError(
-      "invalid_config",
-      "DingTalk install requires client_id",
-      "client_id_required",
-    );
-  }
   const syncMode = parseSyncMode(input.sync_mode) ?? DEFAULT_SYNC_MODE;
-  const robotCode = configString(input, "robot_code") ?? clientId;
   const base: Record<string, JsonValue> = {
-    client_id: clientId,
-    robot_code: robotCode,
     sync_mode: syncMode,
   };
   const rawSelection = configString(input, "selection") ?? "";

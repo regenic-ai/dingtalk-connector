@@ -1,43 +1,40 @@
-import type { ConnectorCatalogProbe } from "@regenic/connector-contract";
-import { DingTalkOpenApi } from "./dingtalk-openapi";
+import type { CopyRef } from "@regenic/connector-contract";
+import { probeDwsAuth, type DwsRunOptions } from "./dingtalk-client";
+
+const PROBE_TTL_MS = 20_000;
+let cache: { at: number; installed: boolean; authenticated: boolean } | undefined;
 
 export async function probeDingTalkCatalog(input: {
   env: NodeJS.ProcessEnv;
-}): Promise<ConnectorCatalogProbe> {
-  const clientId = input.env.DINGTALK_CLIENT_ID?.trim();
-  const clientSecret = input.env.DINGTALK_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) {
-    return {
-      services: {
-        "dingtalk-app": {
-          ready: false,
-          hint: "probe.missing",
-        },
-      },
-    };
+  command?: string;
+  spawn?: DwsRunOptions["spawn"];
+  now?: () => number;
+}): Promise<{
+  services: Record<string, { ready: boolean; hint: CopyRef }>;
+}> {
+  const now = input.now?.() ?? Date.now();
+  if (!cache || now - cache.at >= PROBE_TTL_MS) {
+    const probe = await probeDwsAuth({
+      command: input.command ?? input.env.REGENIC_DWS_CLI,
+      env: input.env,
+      spawn: input.spawn,
+    });
+    cache = { at: now, ...probe };
   }
-  try {
-    await new DingTalkOpenApi({
-      client_id: clientId,
-      client_secret: clientSecret,
-      robot_code: clientId,
-    }).accessToken();
-    return {
-      services: {
-        "dingtalk-app": {
-          ready: true,
-          hint: "probe.ready",
-        },
+  return {
+    services: {
+      dws: {
+        ready: cache.installed && cache.authenticated,
+        hint: !cache.installed
+          ? "probe.notInstalled"
+          : !cache.authenticated
+            ? "probe.notSignedIn"
+            : "probe.ready",
       },
-    };
-  } catch {
-    return {
-      services: {
-        "dingtalk-app": {
-          ready: false,
-          hint: "probe.rejected",
-        },
-      },
-    };
-  }
+    },
+  };
+}
+
+export function resetDingTalkProbeForTests(): void {
+  cache = undefined;
 }

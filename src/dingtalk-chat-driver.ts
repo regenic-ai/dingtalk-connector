@@ -13,12 +13,11 @@ import {
   type ResolveStreamsOptions,
 } from "@regenic/connector-contract";
 import {
-  dingtalkClientFor,
-  disconnectDingTalkClients,
+  dwsClientFor,
+  resetDwsClientsForTests,
   type DingTalkImClient,
 } from "./dingtalk-client";
 import {
-  configString,
   dingtalkAllLabel,
   dingtalkInstallConfig,
   dingtalkKinds,
@@ -34,9 +33,8 @@ import {
   dingtalkConversationsFromThreads,
   resolveDingTalkConversationTargets,
 } from "./dingtalk-directory";
-import { clearAllDingTalkInboxes } from "./dingtalk-inbox";
 import { dingtalkLocaleTables } from "./locales";
-import { DINGTALK_SOURCE, dingtalkSentMessageId } from "./dingtalk-message";
+import { DINGTALK_SOURCE } from "./dingtalk-message";
 import type { DingTalkChatMode, DingTalkConversation } from "./dingtalk-message";
 import { DingTalkChatPollConnector } from "./dingtalk-chat-poll-connector";
 import { dingtalkChatPlugin } from "./plugin";
@@ -50,14 +48,13 @@ import {
   dingtalkConversationIdFromStreamKey,
   dingtalkStreamKey,
 } from "./dingtalk-streams";
-import type { DingTalkCredentials } from "./dingtalk-openapi";
 
 export {
   dingtalkSelection,
   dingtalkStreamDiscover,
   dingtalkWriteBackLabels,
 } from "./dingtalk-config";
-export { setDingTalkClientForTests } from "./dingtalk-client";
+export { resetDwsClientsForTests };
 export { DINGTALK_STREAM_PACE, dingtalkStreamKey } from "./dingtalk-streams";
 
 const CONNECTOR_TYPE = "dingtalk-chat";
@@ -68,9 +65,7 @@ export const dingtalkChatDriver: ChannelDriver = {
   connector_protocol: CONNECTOR_PROTOCOL,
 
   onStoreClear() {
-    credentialCache.clear();
-    clearAllDingTalkInboxes();
-    disconnectDingTalkClients();
+    resetDwsClientsForTests();
   },
 
   install(input): NewConnectorInstallation {
@@ -112,7 +107,7 @@ export const dingtalkChatDriver: ChannelDriver = {
       create: false,
       list_title: "conversation",
       hydrate_on_open: true,
-      receipts: true,
+      attention: true,
     };
   },
 
@@ -131,25 +126,6 @@ export const dingtalkChatDriver: ChannelDriver = {
       description: "catalog.description",
       credential_hint: "catalog.credentialHint",
       fields: [
-        {
-          key: "client_id",
-          label: "field.clientId",
-          required: true,
-          placeholder: "field.clientId.placeholder",
-        },
-        {
-          key: "client_secret",
-          label: "field.clientSecret",
-          required: true,
-          secret: true,
-          placeholder: "field.clientSecret.placeholder",
-        },
-        {
-          key: "robot_code",
-          label: "field.robotCode",
-          required: false,
-          placeholder: "field.robotCode.placeholder",
-        },
         {
           key: "sync_mode",
           label: "field.syncMode",
@@ -182,42 +158,38 @@ export const dingtalkChatDriver: ChannelDriver = {
             { value: "group", label: "option.kinds.group" },
             { value: "p2p", label: "option.kinds.p2p" },
           ],
-          visible_when: { field: "selection", values: ["all", "recent"] },
+          visible_when: { field: "selection", values: ["all", "recent", "pick"] },
         },
         {
           key: "conversation_ids",
           label: "field.conversationIds",
           required: true,
+          multiple: true,
           placeholder: "field.conversationIds.placeholder",
+          filter_options_by: "kinds",
+          option_labels_key: "conversation_names",
           visible_when: { field: "selection", value: "pick" },
         },
       ],
       prerequisites: [
         {
-          kind: "env" as const,
-          key: "DINGTALK_CLIENT_ID",
-          label: "prereq.clientId",
-          required: false,
-          hint: "prereq.env.hint",
-        },
-        {
-          kind: "env" as const,
-          key: "DINGTALK_CLIENT_SECRET",
-          label: "prereq.clientSecret",
-          required: false,
-          hint: "prereq.env.hint",
+          kind: "local_service" as const,
+          key: "dws",
+          label: "prereq.dws",
+          required: true,
+          hint: "prereq.dws.hint",
         },
       ],
       setup_steps: [
         {
-          title: "setup.createApp.title",
-          body: "setup.createApp.body",
-          href: "https://open-dev.dingtalk.com/",
+          title: "setup.installCli.title",
+          command: "npm install -g dingtalk-workspace-cli",
+          href: "https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli",
         },
         {
-          title: "setup.robot.title",
-          body: "setup.robot.body",
-          href: "https://open.dingtalk.com/document/dingstart/robot-receive-message",
+          title: "setup.signIn.title",
+          body: "setup.signIn.body",
+          command: "dws auth login",
         },
         {
           title: "setup.choose.title",
@@ -237,28 +209,28 @@ export const dingtalkChatDriver: ChannelDriver = {
     const selection = dingtalkSelection(config);
     const conversationIds = dingtalkPickedConversationIds(config);
     if (selection === "recent") {
-      return { label: dingtalkRecentLabel(config), detail: { literal: "stream" } };
+      return { label: dingtalkRecentLabel(config), detail: { literal: "cli" } };
     }
     if (selection === "all") {
-      return { label: dingtalkAllLabel(config), detail: { literal: "stream" } };
+      return { label: dingtalkAllLabel(config), detail: { literal: "cli" } };
     }
     const names = pickedConversationNames(config, conversationIds);
     if (conversationIds.length > 1) {
       return {
         label: { key: "present.pickedCount", params: { count: conversationIds.length } },
-        detail: { literal: "stream" },
+        detail: { literal: "cli" },
       };
     }
     return {
       label: {
         literal: names[0] ?? conversationIds[0] ?? installation.id,
       },
-      detail: { literal: "stream" },
+      detail: { literal: "cli" },
     };
   },
 
   async resolveStreams(installation, host, env, options?: ResolveStreamsOptions) {
-    const client = await clientFor(installation, host, env);
+    const client = await clientFor(env);
     const mounted = conversationsFromStreams(
       host.get("connectors").listStreams(installation.id),
     );
@@ -292,7 +264,7 @@ export const dingtalkChatDriver: ChannelDriver = {
         })),
       );
     }
-    const client = await clientFor(installation, host, env);
+    const client = await clientFor(env);
     const kinds = dingtalkKinds(installation.config);
     if (selection === "recent") {
       return createDingTalkRecentSyncSource(client, kinds);
@@ -307,7 +279,7 @@ export const dingtalkChatDriver: ChannelDriver = {
         "DingTalk installation does not include this conversation",
       );
     }
-    const client = await clientFor(installation, host, env);
+    const client = await clientFor(env);
     const mounted = conversationsFromStreams(
       host.get("connectors").listStreams(installation.id),
     ).find((conversation) => conversation.conversation_id === thread.target);
@@ -380,7 +352,7 @@ export const dingtalkChatDriver: ChannelDriver = {
     if (missing.length === 0) {
       return labels;
     }
-    const client = clientFromCache(installation, env);
+    const client = dwsClientFor({ env });
     if (!client) {
       return labels;
     }
@@ -393,74 +365,64 @@ export const dingtalkChatDriver: ChannelDriver = {
     return labels;
   },
 
-  async readReceipts(installation, threads, host, env) {
-    const receipts = new Map<
-      string,
-      { state: "read" | "sent"; read_count?: number }
-    >();
-    if (!this.capabilities(installation).receipts) {
-      return receipts;
+  async readAttention(installation, threads, _host, env) {
+    const attention = new Map<string, { unread: boolean; unread_count?: number; mentioned?: boolean }>();
+    if (!this.capabilities(installation).attention) {
+      return attention;
     }
-    const client = await clientFor(installation, host, env);
-    const wanted: Array<{
-      external_id: string;
-      conversation_id: string;
-      process_query_key: string;
-      chat_mode?: DingTalkChatMode;
-    }> = [];
-    const mounted = new Map(
-      conversationsFromStreams(host.get("connectors").listStreams(installation.id)).map(
-        (conversation) => [conversation.conversation_id, conversation],
-      ),
-    );
+    let unread: Awaited<ReturnType<DingTalkImClient["listUnread"]>> = [];
+    try {
+      unread = await clientFor(env).listUnread();
+    } catch {
+      return attention;
+    }
+    const byId = new Map(unread.map((item) => [item.conversation_id, item]));
     for (const thread of threads) {
       if (thread.source !== DINGTALK_SOURCE) {
         continue;
       }
-      for (const outbound of thread.outbound) {
-        const processQueryKey = dingtalkSentMessageId(outbound.external_id);
-        if (!processQueryKey) {
-          continue;
-        }
-        wanted.push({
-          external_id: outbound.external_id,
-          conversation_id: thread.target,
-          process_query_key: processQueryKey,
-          chat_mode: mounted.get(thread.target)?.chat_mode,
-        });
-      }
-    }
-    const unique = [
-      ...new Map(wanted.map((item) => [item.process_query_key, item])).values(),
-    ].slice(0, 8);
-    const live = await Promise.all(
-      unique.map(async (item) => {
-        const receipt = await client.readReceipt({
-          conversation_id: item.conversation_id,
-          chat_mode: item.chat_mode,
-          process_query_key: item.process_query_key,
-        });
-        return { process_query_key: item.process_query_key, receipt };
-      }),
-    );
-    for (const item of live) {
-      if (!item.receipt) {
+      const row = byId.get(thread.target);
+      if (!row) {
         continue;
       }
-      const state = item.receipt.read_user_ids.length > 0 ? "read" : "sent";
-      for (const row of wanted) {
-        if (row.process_query_key !== item.process_query_key) {
-          continue;
-        }
-        receipts.set(
-          row.external_id,
-          state === "read"
-            ? { state, read_count: item.receipt.read_user_ids.length }
-            : { state },
-        );
-      }
+      attention.set(`${thread.source}:${thread.target}`, {
+        unread: true,
+        ...(row.unread_count !== undefined ? { unread_count: row.unread_count } : {}),
+        ...(row.mentioned ? { mentioned: true } : {}),
+      });
     }
-    return receipts;
+    return attention;
+  },
+
+  async ackAttention(installation, thread, ack, _host, env) {
+    if (thread.source !== DINGTALK_SOURCE || !this.capabilities(installation).attention) {
+      return;
+    }
+    try {
+      await clientFor(env).markRead({
+        conversation_id: thread.target,
+        message_id: ack.last_read_external_id,
+      });
+    } catch {
+      // Leaving the badge is safer than failing the open.
+    }
+  },
+
+  async listCatalogFieldOptions({ env }) {
+    const client = dwsClientFor({ env });
+    try {
+      const conversations = await client.listAllConversations();
+      return {
+        conversation_ids: conversations.map((conversation) => ({
+          value: conversation.conversation_id,
+          label: conversation.name?.trim() || conversation.conversation_id,
+          kind: conversation.chat_mode === "p2p" ? "p2p" : "group",
+          title: conversation.name?.trim() || undefined,
+        })),
+      };
+    } catch {
+      return { conversation_ids: [] };
+    }
   },
 
   async probeCatalog({ env }) {
@@ -468,58 +430,11 @@ export const dingtalkChatDriver: ChannelDriver = {
   },
 };
 
-const credentialCache = new Map<string, DingTalkCredentials>();
-
-async function clientFor(
-  installation: ConnectorInstallation,
-  host: ConnectorHost,
-  env: NodeJS.ProcessEnv,
-): Promise<DingTalkImClient> {
-  const credentials = await credentialsFor(installation, host, env);
-  credentialCache.set(installation.id, credentials);
-  return dingtalkClientFor(credentials);
-}
-
-function clientFromCache(
-  installation: ConnectorInstallation,
-  env: NodeJS.ProcessEnv,
-): DingTalkImClient | undefined {
-  const cached = credentialCache.get(installation.id);
-  const clientId = configString(installation.config, "client_id") || env.DINGTALK_CLIENT_ID?.trim();
-  const secret = env.DINGTALK_CLIENT_SECRET?.trim();
-  const credentials = cached ?? (clientId && secret
-    ? {
-        client_id: clientId,
-        client_secret: secret,
-        robot_code: configString(installation.config, "robot_code") || clientId,
-      }
-    : undefined);
-  return credentials ? dingtalkClientFor(credentials) : undefined;
-}
-
-async function credentialsFor(
-  installation: ConnectorInstallation,
-  host: ConnectorHost,
-  env: NodeJS.ProcessEnv,
-): Promise<DingTalkCredentials> {
-  const clientId =
-    configString(installation.config, "client_id") || env.DINGTALK_CLIENT_ID?.trim() || "";
-  const robotCode = configString(installation.config, "robot_code") || clientId;
-  const secret =
-    (await host.secrets.read(CONNECTOR_TYPE, installation.id, "client_secret")) ||
-    env.DINGTALK_CLIENT_SECRET?.trim() ||
-    "";
-  if (!clientId || !secret) {
-    throw new ChannelDriverError(
-      "missing_credentials",
-      "DingTalk client id and client secret are required",
-    );
-  }
-  return {
-    client_id: clientId,
-    client_secret: secret,
-    robot_code: robotCode,
-  };
+function clientFor(env: NodeJS.ProcessEnv): DingTalkImClient {
+  return dwsClientFor({
+    command: env.REGENIC_DWS_CLI,
+    env,
+  });
 }
 
 async function mountConversations(

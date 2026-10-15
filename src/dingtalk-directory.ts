@@ -39,7 +39,9 @@ export async function resolveDingTalkConversationTargets(
   }
   let listed: DingTalkConversation[] = [];
   try {
-    listed = await client.listRecentConversations(kinds);
+    listed = discover === "full"
+      ? await client.listAllConversations(kinds)
+      : await client.listRecentConversations(kinds);
   } catch {
     return known;
   }
