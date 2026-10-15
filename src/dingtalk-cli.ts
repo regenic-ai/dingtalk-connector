@@ -18,6 +18,7 @@ export type DwsSpawn = (input: {
   env?: NodeJS.ProcessEnv;
   timeout_ms: number;
   signal?: AbortSignal;
+  cwd?: string;
 }) => Promise<DwsSpawnResult>;
 
 export interface DwsRunOptions {
@@ -26,6 +27,8 @@ export interface DwsRunOptions {
   spawn?: DwsSpawn;
   timeout_ms?: number;
   signal?: AbortSignal;
+  /** dws only writes downloads to relative paths inside its working directory. */
+  cwd?: string;
 }
 
 const CLI_SLOTS = 4;
@@ -46,6 +49,7 @@ export async function runDws(
       env: options.env,
       timeout_ms: options.timeout_ms ?? 30_000,
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.cwd ? { cwd: options.cwd } : {}),
     });
     if (result.exit_code !== 0) {
       throw new DingTalkCliError(cliFailure(result));
@@ -61,10 +65,12 @@ export function spawnDwsProcess(input: {
   env?: NodeJS.ProcessEnv;
   timeout_ms: number;
   signal?: AbortSignal;
+  cwd?: string;
 }): Promise<DwsSpawnResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(input.command[0] ?? "dws", input.command.slice(1), {
       env: input.env ?? process.env,
+      ...(input.cwd ? { cwd: input.cwd } : {}),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

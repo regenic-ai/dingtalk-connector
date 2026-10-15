@@ -9,7 +9,9 @@ Regenic 的钉钉会话连接器。走 DingTalk Workspace CLI（`dws`），以�
 - 回复：`+messages-send --as user --text`，带 `--idempotency-key`，重试不会重复发送。
 - 未读和已读：`+unread-chats`、`+conversation-mark-read --conversation-id --message-id`。
 
-图片、文件、语音只同步成 `[image]`、`[file] 文件名` 这样的占位文本，不下载内容。回复只支持文本。
+- 附件：图片、文件、语音先以 `[image]`、`[file] 文件名` 加附件指针入库，再在媒体通道里用 `+messages-resource-download` 下载，以 `revise` 把文件补回原消息。单个文件上限 8 MB，失败按 1s、4s、16s… 退避重试 5 次。待下载队列存在 `~/.regenic/dingtalk-media-jobs`（可用 `REGENIC_DINGTALK_MEDIA_JOBS_DIR` 改位置），重启后继续。
+
+回复只支持文本，和飞书连接器一致。
 
 ## 准备
 

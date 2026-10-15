@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import {
   DingTalkCliError,
   isDwsMissing,
@@ -11,8 +14,24 @@ import type {
   DingTalkInboundMessage,
   DingTalkResourceRef,
 } from "./dingtalk-message";
+import type { DingTalkDownloadedFile, DingTalkDownloadType } from "./dingtalk-media";
 
 export { DingTalkCliError };
+
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+
+async function firstFile(directory: string): Promise<string | undefined> {
+  const entries = await readdir(directory, { recursive: true });
+  for (const entry of entries.sort()) {
+    if (basename(entry).startsWith(".")) {
+      continue;
+    }
+    if ((await stat(join(directory, entry))).isFile()) {
+      return entry;
+    }
+  }
+  return undefined;
+}
 export type { DwsRunOptions };
 
 export interface DingTalkHistoryPage {
@@ -68,6 +87,15 @@ export interface DingTalkImClient {
   selfUserId(): Promise<string | undefined>;
   listUnread(): Promise<DingTalkUnread[]>;
   markRead(input: { conversation_id: string; message_id?: string }): Promise<void>;
+  downloadResource?(input: DingTalkDownloadRequest): Promise<DingTalkDownloadedFile>;
+}
+
+export interface DingTalkDownloadRequest {
+  conversation_id: string;
+  message_id: string;
+  resource_id: string;
+  type: DingTalkDownloadType;
+  signal?: AbortSignal;
 }
 
 export class DwsCliClient implements DingTalkImClient {
@@ -205,6 +233,39 @@ export class DwsCliClient implements DingTalkImClient {
       ],
       this.options,
     );
+  }
+
+  async downloadResource(input: DingTalkDownloadRequest): Promise<DingTalkDownloadedFile> {
+    const directory = await mkdtemp(join(tmpdir(), "regenic-dingtalk-dl-"));
+    try {
+      const args = [
+        "chat",
+        "+messages-resource-download",
+        "--resource-id",
+        input.resource_id,
+        "--type",
+        input.type,
+        "--output",
+        ".",
+      ];
+      if (input.type !== "fileId") {
+        args.push("--message-id", input.message_id, "--open-conversation-id", input.conversation_id);
+      }
+      await runDws(args, {
+        ...this.runOptions({ timeout_ms: DOWNLOAD_TIMEOUT_MS, signal: input.signal }),
+        cwd: directory,
+      });
+      const file = await firstFile(directory);
+      if (!file) {
+        throw new DingTalkCliError("dws download wrote no file");
+      }
+      return {
+        bytes: new Uint8Array(await readFile(join(directory, file))),
+        filename: basename(file),
+      };
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
   private runOptions(input: { timeout_ms?: number; signal?: AbortSignal }): DwsRunOptions {

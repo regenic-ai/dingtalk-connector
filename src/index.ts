@@ -28,6 +28,14 @@ export type {
   DingTalkSendResult,
 } from "./dingtalk-client";
 export { DingTalkChatPollConnector } from "./dingtalk-chat-poll-connector";
+export {
+  MAX_DINGTALK_ATTACHMENT_BYTES,
+  clearDingTalkMediaJobsForTests,
+  loadDingTalkMediaJobs,
+  setDingTalkMediaJobsRootForTests,
+} from "./dingtalk-media";
+export type { DingTalkDownloadedFile, DingTalkMediaJob } from "./dingtalk-media";
+export type { DingTalkDownloadRequest } from "./dingtalk-client";
 export { DingTalkChatEgress, textFromContentParts } from "./dingtalk-chat-egress";
 export { dingtalkChatDriver } from "./dingtalk-chat-driver";
 export { dingtalkChatPlugin } from "./plugin";

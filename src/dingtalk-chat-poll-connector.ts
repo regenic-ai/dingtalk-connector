@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   INGEST_SCHEMA_VERSION,
   channelRecord,
+  type ContentPart,
   type ConnectorCursor,
   type ConnectorPollOptions,
   type IngestBatch,
@@ -15,6 +16,19 @@ import {
   type DingTalkChatMode,
   type DingTalkInboundMessage,
 } from "./dingtalk-message";
+import {
+  MAX_DINGTALK_MEDIA_ATTEMPTS,
+  MAX_DINGTALK_MEDIA_JOBS_PER_POLL,
+  dingtalkDownloadType,
+  downloadedAttachment,
+  enqueueMediaJobs,
+  isDueMediaJob,
+  loadDingTalkMediaJobs,
+  mediaRetryBackoffMs,
+  pointerAttachment,
+  saveDingTalkMediaJobs,
+  type DingTalkMediaJob,
+} from "./dingtalk-media";
 
 export interface DingTalkChatPollConnectorOptions {
   connector_id: string;
@@ -42,6 +56,11 @@ interface CursorState {
 interface Edge {
   ms: number;
   ids: string[];
+}
+
+interface PollContext {
+  wantMedia: boolean;
+  signal?: AbortSignal;
 }
 
 const INTERACTIVE_TIMEOUT_MS = 8_000;
@@ -102,8 +121,12 @@ export class DingTalkChatPollConnector {
     options?: ConnectorPollOptions,
   ): Promise<PollResult> {
     const state = decodeCursor(cursor?.value);
+    const ctx: PollContext = {
+      wantMedia: options?.media !== false,
+      ...(options?.signal ? { signal: options.signal } : {}),
+    };
     if (options?.media === true) {
-      return this.page(cursor?.value, state, "media", []);
+      return this.page(ctx, cursor?.value, state, "media", []);
     }
     const described = this.client.describeConversation(this.options.conversation_id);
     if (described) {
@@ -112,28 +135,27 @@ export class DingTalkChatPollConnector {
     if (!this.selfId) {
       this.selfId = await this.client.selfUserId();
     }
-    const signal = options?.signal;
     if (options?.older === true) {
       const anchor = anchorEdge(options);
       return anchor
-        ? this.pollAnchored(cursor?.value, state, anchor, signal)
-        : this.pollOlder(cursor?.value, state, signal);
+        ? this.pollAnchored(cursor?.value, state, anchor, ctx)
+        : this.pollOlder(cursor?.value, state, ctx);
     }
     if (!state.live_seeded) {
-      return this.pollSeed(cursor?.value, state, signal);
+      return this.pollSeed(cursor?.value, state, ctx);
     }
     if (options?.latest === true || state.head_ms === undefined) {
-      return this.pollLatest(cursor?.value, state, signal);
+      return this.pollLatest(cursor?.value, state, ctx);
     }
-    return this.pollLive(cursor?.value, state, signal);
+    return this.pollLive(cursor?.value, state, ctx);
   }
 
   private async pollSeed(
     previous: string | undefined,
     state: CursorState,
-    signal: AbortSignal | undefined,
+    ctx: PollContext,
   ): Promise<PollResult> {
-    const page = await this.list({ direction: "older", signal });
+    const page = await this.list({ direction: "older", signal: ctx.signal });
     const items = chronological(page.items);
     const next: CursorState = {
       ...state,
@@ -142,19 +164,19 @@ export class DingTalkChatPollConnector {
       ...edgeState("head", newestEdge(items)),
       ...edgeState("tail", oldestEdge(items)),
     };
-    return this.page(previous, next, "live", items, page.has_more);
+    return this.page(ctx, previous, next, "live", items, page.has_more);
   }
 
   /** Newest page for the thread the user just opened. History stays where it was. */
   private async pollLatest(
     previous: string | undefined,
     state: CursorState,
-    signal: AbortSignal | undefined,
+    ctx: PollContext,
   ): Promise<PollResult> {
     const page = await this.list({
       direction: "older",
       timeout_ms: INTERACTIVE_TIMEOUT_MS,
-      signal,
+      signal: ctx.signal,
     });
     const items = chronological(page.items);
     const next: CursorState = {
@@ -162,19 +184,19 @@ export class DingTalkChatPollConnector {
       ...edgeState("head", laterEdge(headOf(state), newestEdge(items))),
       ...(state.tail_ms === undefined ? edgeState("tail", oldestEdge(items)) : {}),
     };
-    return this.page(previous, next, "latest", items, false);
+    return this.page(ctx, previous, next, "latest", items, false);
   }
 
   private async pollLive(
     previous: string | undefined,
     state: CursorState,
-    signal: AbortSignal | undefined,
+    ctx: PollContext,
   ): Promise<PollResult> {
     const head = headOf(state);
     const page = await this.list({
       direction: "newer",
       ...(head ? { time: secondIso(head.ms, "floor") } : {}),
-      signal,
+      signal: ctx.signal,
     });
     const items = chronological(page.items).filter((message) => !head || afterEdge(message, head));
     const next: CursorState = {
@@ -182,25 +204,25 @@ export class DingTalkChatPollConnector {
       live_seeded: true,
       ...edgeState("head", laterEdge(head, newestEdge(items))),
     };
-    return this.page(previous, next, "live", items, page.has_more && items.length > 0);
+    return this.page(ctx, previous, next, "live", items, page.has_more && items.length > 0);
   }
 
   private async pollOlder(
     previous: string | undefined,
     state: CursorState,
-    signal: AbortSignal | undefined,
+    ctx: PollContext,
   ): Promise<PollResult> {
     const tail = tailOf(state);
     if (state.history_done || !tail) {
-      return this.page(previous, { ...state, history_done: true }, "older", []);
+      return this.page(ctx, previous, { ...state, history_done: true }, "older", []);
     }
-    const page = await this.walkOlder(tail, signal);
+    const page = await this.walkOlder(tail, ctx.signal);
     const next: CursorState = {
       ...state,
       history_done: !page.has_more,
       ...edgeState("tail", earlierEdge(tail, oldestEdge(page.items))),
     };
-    return this.page(previous, next, "older", page.items, page.has_more);
+    return this.page(ctx, previous, next, "older", page.items, page.has_more);
   }
 
   /** One scroll before what is on screen. The stored history walk stays put. */
@@ -208,11 +230,11 @@ export class DingTalkChatPollConnector {
     previous: string | undefined,
     state: CursorState,
     anchor: Edge,
-    signal: AbortSignal | undefined,
+    ctx: PollContext,
   ): Promise<PollResult> {
-    const page = await this.walkOlder(anchor, signal, INTERACTIVE_TIMEOUT_MS);
+    const page = await this.walkOlder(anchor, ctx.signal, INTERACTIVE_TIMEOUT_MS);
     const next: CursorState = page.has_more ? state : { ...state, history_done: true };
-    return this.page(previous, next, `older:${anchor.ms}`, page.items, page.has_more, {
+    return this.page(ctx, previous, next, `older:${anchor.ms}`, page.items, page.has_more, {
       live_seeded: state.live_seeded === true,
       history_pending: page.has_more,
     });
@@ -252,39 +274,130 @@ export class DingTalkChatPollConnector {
     });
   }
 
-  private page(
+  private async page(
+    ctx: PollContext,
     previous: string | undefined,
     state: CursorState,
     lane: string,
     messages: DingTalkInboundMessage[],
     hasMore = false,
     hint: SyncPollHint = dingtalkPollHint(state),
-  ): PollResult {
+  ): Promise<PollResult> {
+    const canDownload = typeof this.client.downloadResource === "function";
+    const queued = canDownload
+      ? enqueueMediaJobs(
+          loadDingTalkMediaJobs(this.options.connector_id, this.options.conversation_id),
+          messages,
+        )
+      : [];
+    const drained = ctx.wantMedia && queued.length > 0
+      ? await this.drainMediaJobs(queued, ctx)
+      : { records: [], jobs: queued };
+    if (canDownload) {
+      saveDingTalkMediaJobs(this.options.connector_id, this.options.conversation_id, drained.jobs);
+    }
     const nextCursor = encodeCursor(state);
+    const revised = drained.records.map((record) => record.external_id);
     const batch: IngestBatch = {
       schema_version: INGEST_SCHEMA_VERSION,
       connector_id: this.options.connector_id,
       org_id: this.options.org_id,
-      delivery_id: deliveryId(this.options.conversation_id, lane, previous, nextCursor),
+      delivery_id: deliveryId(
+        this.options.conversation_id,
+        revised.length > 0 ? `${lane}:media:${revised.join(",")}` : lane,
+        previous,
+        nextCursor,
+      ),
       received_at: this.now(),
       next_cursor: nextCursor,
-      records: messages.flatMap((message) => this.toRecord(message)),
+      records: [
+        ...messages.map((message) => this.toRecord(message)),
+        ...drained.records,
+      ],
     };
     return {
       batch,
       next_cursor: nextCursor,
       has_more: hasMore,
+      media_pending: drained.jobs.length > 0,
       poll_hint: hint,
     };
   }
 
-  private toRecord(message: DingTalkInboundMessage): IngestBatch["records"] {
+  /** Download queued attachments and revise their messages with the bytes. */
+  private async drainMediaJobs(
+    jobs: DingTalkMediaJob[],
+    ctx: PollContext,
+  ): Promise<{ records: IngestBatch["records"]; jobs: DingTalkMediaJob[] }> {
+    const nowMs = this.clockMs();
+    const due = new Set(
+      jobs.filter((job) => isDueMediaJob(job, nowMs))
+        .slice(0, MAX_DINGTALK_MEDIA_JOBS_PER_POLL)
+        .map((job) => job.message.msg_id),
+    );
+    const records: IngestBatch["records"] = [];
+    const remaining: DingTalkMediaJob[] = [];
+    for (const job of jobs) {
+      if (!due.has(job.message.msg_id)) {
+        remaining.push(job);
+        continue;
+      }
+      const parts = await this.downloadMessage(job.message, ctx);
+      const complete = parts.every((part) => part.bytes);
+      const attempts = job.attempts + 1;
+      if (complete || attempts >= MAX_DINGTALK_MEDIA_ATTEMPTS) {
+        if (parts.some((part) => part.bytes)) {
+          records.push(this.toRecord(job.message, parts, "revise"));
+        }
+        continue;
+      }
+      remaining.push({ ...job, attempts, retry_after: nowMs + mediaRetryBackoffMs(attempts) });
+    }
+    return { records, jobs: remaining };
+  }
+
+  private async downloadMessage(
+    message: DingTalkInboundMessage,
+    ctx: PollContext,
+  ): Promise<ContentPart[]> {
+    const parts: ContentPart[] = [];
+    for (const ref of message.resources ?? []) {
+      let part: ContentPart | undefined;
+      try {
+        const file = await this.client.downloadResource!({
+          conversation_id: this.options.conversation_id,
+          message_id: message.msg_id,
+          resource_id: ref.resource_id,
+          type: dingtalkDownloadType(ref, message.msg_type),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+        part = downloadedAttachment(ref, message.msg_type, file);
+      } catch (error) {
+        if (ctx.signal?.aborted) {
+          throw error;
+        }
+      }
+      parts.push(part ?? pointerAttachment(ref, message.msg_type));
+    }
+    return parts;
+  }
+
+  private clockMs(): number {
+    const parsed = Date.parse(this.now());
+    return Number.isFinite(parsed) ? parsed : Date.now();
+  }
+
+  private toRecord(
+    message: DingTalkInboundMessage,
+    attachments: ContentPart[] = (message.resources ?? []).map((ref) => pointerAttachment(ref, message.msg_type)),
+    operation: "create" | "revise" = "create",
+  ): IngestBatch["records"][number] {
     const self = this.selfId && message.sender_id === this.selfId;
     const assistant = message.sender_type === "bot" || message.sender_type === "app";
     const chatMode = message.chat_mode ?? this.chatMode;
     const conversationKind = dingtalkConversationKind(chatMode);
-    return [
-      channelRecord({
+    return {
+      ...channelRecord({
         channel: DINGTALK_SOURCE,
         kind: assistant ? "assistant" : "user",
         direction: self ? "outbound" : "inbound",
@@ -297,8 +410,10 @@ export class DingTalkChatPollConnector {
         ...(conversationKind ? { conversation_kind: conversationKind } : {}),
         ...(message.thread_id ? { thread_id: message.thread_id } : {}),
         text: message.text,
+        ...(attachments.length > 0 ? { content: attachments } : {}),
       }),
-    ];
+      operation,
+    };
   }
 }
 
