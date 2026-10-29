@@ -1,0 +1,8 @@
+[
+  { "conversationId": "fixture-group-1", "latestMessageTime": 1700000000000, "name": "Fixture group 1", "nameKnown": true, "type": "group" },
+  { "conversationId": "fixture-group-2", "latestMessageTime": 1700000000000, "name": "Fixture group 2", "nameKnown": true, "type": "group" },
+  { "conversationId": "fixture-group-3", "latestMessageTime": 1700000000000, "name": "Fixture group 3", "nameKnown": true, "type": "group" },
+  { "conversationId": "fixture-group-4", "latestMessageTime": 1700000000000, "name": "Fixture group 4", "nameKnown": true, "type": "group" },
+  { "conversationId": "fixture-group-5", "latestMessageTime": 1700000000000, "name": "Fixture group 5", "nameKnown": true, "type": "group" },
+  { "conversationId": "fixture-direct", "latestMessageTime": 1700000000000, "name": "Fixture direct", "nameKnown": true, "type": "direct" }
+]

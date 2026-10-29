@@ -14,6 +14,8 @@ const {
   resolveDingTalkConversationTargets,
 } = require("../dist/dingtalk-directory");
 const { dingtalkChatDriver } = require("../dist/dingtalk-chat-driver");
+const recentRows = require("./fixtures/recent-conversation-rows.json");
+const fullRows = require("./fixtures/full-conversation-rows.json");
 const {
   createDingTalkRecentSyncSource,
   createDingTalkSyncSource,
@@ -61,7 +63,7 @@ describe("DingTalk conversation discovery", () => {
     );
   });
 
-  it("resolves picked direct-message routing after a cold start", async () => {
+  it("resolves picked direct-message routing when full discovery supplies a peer", async () => {
     const commands = [];
     const client = new DwsCliClient({
       spawn: async (input) => {
@@ -96,7 +98,7 @@ describe("DingTalk conversation discovery", () => {
       conversation_id: picked[0].conversation_id,
       direction: "newer",
     });
-    assert.deepEqual(commands[1].slice(3, 5), ["--user", "peer-user"]);
+    assert.deepEqual(commands.at(-1).slice(3, 5), ["--user", "peer-user"]);
   });
 
   it("rebuilds picked direct-message egress routing on a cold thread open", async () => {
@@ -153,13 +155,140 @@ describe("DingTalk conversation discovery", () => {
           describeConversation() {
             return undefined;
           },
+          async listRecentConversations() {
+            return [];
+          },
           async listAllConversations() {
             return [{ conversation_id: "unknown" }];
           },
         },
       ),
-      /Unable to resolve routing details.*unknown/,
+      /Unable to resolve routing details.*did not establish direct\/group mode/,
     );
+  });
+
+  it("parses observed recent direct metadata without inventing a peer", async () => {
+    const client = fixtureClient([]);
+    const recent = await client.listRecentConversations();
+    assert.equal(recent.filter((row) => row.chat_mode === "group").length, 5);
+    assert.deepEqual(recent.find((row) => row.conversation_id === "fixture-direct"), {
+      conversation_id: "fixture-direct",
+      name: "Fixture direct",
+      chat_mode: "p2p",
+    });
+    const full = await client.listAllConversations();
+    assert.deepEqual(full, fullRows.map((row) => ({
+      conversation_id: row.openConversationId,
+      name: row.conversationName,
+    })));
+    assert.equal(client.describeConversation("fixture-direct").chat_mode, "p2p");
+    assert.equal(client.describeConversation("fixture-direct").peer_user_id, undefined);
+  });
+
+  it("rejects a cold picked direct route from observed discovery rows without reading or sending", async () => {
+    const commands = [];
+    const client = fixtureClient(commands);
+    await assert.rejects(
+      () => resolveDingTalkConversationTargets(
+        { selection: "pick", conversation_ids: ["fixture-direct"] },
+        client,
+      ),
+      /Unsupported selected DingTalk direct conversation:.*peer user ID/,
+    );
+    assert.deepEqual(commands.map((args) => args[2]), [
+      "+recent-conversations", "+conversation-list",
+    ]);
+  });
+
+  it("does not classify a picked conversation from full-list ID and name alone", async () => {
+    const commands = [];
+    const client = fixtureClient(commands, []);
+    await assert.rejects(
+      () => resolveDingTalkConversationTargets(
+        { selection: "pick", conversation_ids: ["fixture-direct"] },
+        client,
+      ),
+      /did not establish direct\/group mode/,
+    );
+    assert.equal(commands.length, 2);
+  });
+
+  it("recovers routing when recent direct metadata supplies a parsed peerUserId", async () => {
+    const commands = [];
+    const client = new DwsCliClient({
+      spawn: async ({ command }) => {
+        commands.push(command);
+        if (command[2] === "+recent-conversations") {
+          return json({ conversations: [{
+            ...recentRows.at(-1),
+            peerUserId: "fixture-peer",
+          }] });
+        }
+        assert.ok(["+chat-messages", "+messages-send"].includes(command[2]));
+        assert.equal(command.includes("--group"), false);
+        assert.equal(command[command.indexOf("--user") + 1], "fixture-peer");
+        return json(command[2] === "+chat-messages"
+          ? { messages: [], hasMore: false }
+          : { openTaskId: "fixture-task" });
+      },
+    });
+    const picked = await resolveDingTalkConversationTargets(
+      { selection: "pick", conversation_ids: ["fixture-direct"] },
+      client,
+    );
+    assert.equal(picked[0].peer_user_id, "fixture-peer");
+    await client.listMessages({ conversation_id: "fixture-direct", direction: "older" });
+    await client.sendText({ conversation_id: "fixture-direct", text: "fixture" });
+    assert.deepEqual(commands.map((args) => args[2]), [
+      "+recent-conversations", "+chat-messages", "+messages-send",
+    ]);
+  });
+
+  for (const operation of ["listMessages", "sendText"]) {
+    for (const routeSource of ["explicit", "cached"]) {
+      it(`rejects ${operation} with ${routeSource} direct mode and no peer before invoking dws`, async () => {
+        const commands = [];
+        const client = fixtureClient(commands);
+        if (routeSource === "cached") {
+          await client.listRecentConversations();
+          commands.length = 0;
+        }
+        for (const peer of [undefined, "", "   "]) {
+          await assert.rejects(
+            () => client[operation]({
+              conversation_id: "fixture-direct",
+              ...(routeSource === "explicit" ? { chat_mode: "p2p" } : {}),
+              peer_user_id: peer,
+              direction: "older",
+              text: "fixture",
+            }),
+            /Unsupported DingTalk direct conversation: missing recipient routing/,
+          );
+        }
+        assert.deepEqual(commands, []);
+      });
+    }
+  }
+
+  it("keeps explicit group history and send routing", async () => {
+    const commands = [];
+    const client = new DwsCliClient({
+      spawn: async ({ command }) => {
+        commands.push(command);
+        return json({ messages: [], hasMore: false, openTaskId: "fixture-task" });
+      },
+    });
+    await client.listMessages({
+      conversation_id: "fixture-group", chat_mode: "group", direction: "older",
+    });
+    await client.sendText({
+      conversation_id: "fixture-group", chat_mode: "group", text: "fixture",
+    });
+    assert.equal(commands.length, 2);
+    for (const command of commands) {
+      assert.equal(command[command.indexOf("--group") + 1], "fixture-group");
+      assert.equal(command.includes("--user"), false);
+    }
   });
 
   it("uses full discovery for the all-conversations sync source", async () => {
@@ -236,6 +365,20 @@ describe("DingTalk probe cache", () => {
 
 function json(body) {
   return { stdout: JSON.stringify(body), stderr: "", exit_code: 0 };
+}
+
+function fixtureClient(commands, recent = recentRows) {
+  return new DwsCliClient({
+    spawn: async ({ command }) => {
+      commands.push(command);
+      if (command[2] === "+recent-conversations") {
+        return json({ conversations: recent });
+      }
+      assert.equal(command[2], "+conversation-list", "only discovery is allowed");
+      assert.ok(command.includes("--page-all"));
+      return json({ conversations: fullRows });
+    },
+  });
 }
 
 async function mountedHost() {
