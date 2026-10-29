@@ -40,7 +40,7 @@ export function createDingTalkSyncSource(
 ): SyncSource {
   return {
     async listDirectory(): Promise<SyncDirectoryPage> {
-      const conversations = await client.listRecentConversations(kinds);
+      const conversations = await client.listAllConversations(kinds);
       return {
         members: conversations.flatMap((conversation) => memberOf(conversation)),
         complete: true,

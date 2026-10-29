@@ -7,7 +7,7 @@ const {
   verifyChannelDriverConformance,
 } = require("@regenic/connector-test-utils");
 const { ChannelDriverError } = require("@regenic/connector-contract");
-const { DwsCliClient } = require("../dist/dingtalk-client");
+const { DwsCliClient, probeDwsAuth } = require("../dist/dingtalk-client");
 const { DingTalkCliError } = require("../dist/dingtalk-cli");
 const {
   DingTalkChatEgress,
@@ -154,6 +154,27 @@ describe("dingtalkChatDriver", () => {
 });
 
 describe("DwsCliClient", () => {
+  it("only reports a missing CLI as not installed and propagates other auth errors", async () => {
+    await assert.rejects(
+      () => probeDwsAuth({
+        spawn: async () => {
+          throw new Error("authentication service unavailable");
+        },
+      }),
+      /authentication service unavailable/,
+    );
+
+    const missing = Object.assign(new Error("dws not found"), { code: "ENOENT" });
+    assert.deepEqual(
+      await probeDwsAuth({
+        spawn: async () => {
+          throw missing;
+        },
+      }),
+      { installed: false, authenticated: false },
+    );
+  });
+
   it("uses the dws v1 flags for history, send and mark-read", async () => {
     const commands = [];
     const client = new DwsCliClient({
