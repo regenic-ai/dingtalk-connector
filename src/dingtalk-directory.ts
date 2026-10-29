@@ -37,14 +37,9 @@ export async function resolveDingTalkConversationTargets(
   if (discover === "known") {
     return known;
   }
-  let listed: DingTalkConversation[] = [];
-  try {
-    listed = discover === "full"
-      ? await client.listAllConversations(kinds)
-      : await client.listRecentConversations(kinds);
-  } catch {
-    return known;
-  }
+  const listed = discover === "full"
+    ? await client.listAllConversations(kinds)
+    : await client.listRecentConversations(kinds);
   const capped = discover === "recent" ? listed.slice(0, DINGTALK_RECENT_LIMIT) : listed;
   return mergeConversations(known, capped);
 }
@@ -86,20 +81,43 @@ export function dingtalkConversationsFromCatalog(
   });
 }
 
-function fillPickedConversations(
+async function fillPickedConversations(
   config: Record<string, unknown>,
   client: DingTalkImClient,
-): DingTalkConversation[] {
+): Promise<DingTalkConversation[]> {
   const ids = dingtalkPickedConversationIds(config);
   const names = pickedConversationNames(config, ids);
+  const cached = ids.map((conversationId) => client.describeConversation(conversationId));
+  const needsDirectory = cached.some(
+    (conversation) =>
+      !conversation?.chat_mode ||
+      (conversation.chat_mode === "p2p" && !conversation.peer_user_id),
+  );
+  const directory = needsDirectory ? await client.listAllConversations() : [];
+  const listed = new Map(
+    directory.map((conversation) => [conversation.conversation_id, conversation]),
+  );
+
   return ids.map((conversationId, index) => {
-    const described = client.describeConversation(conversationId);
+    const listedConversation = listed.get(conversationId);
+    const described = mergeConversations(
+      cached[index] ? [cached[index]!] : [],
+      listedConversation ? [listedConversation] : [],
+    )[0];
+    if (
+      !described?.chat_mode ||
+      (described.chat_mode === "p2p" && !described.peer_user_id)
+    ) {
+      throw new Error(
+        `Unable to resolve routing details for selected DingTalk conversation "${conversationId}"`,
+      );
+    }
     const name = names[index] || described?.name;
     return {
       conversation_id: conversationId,
       ...(name ? { name } : {}),
-      ...(described?.chat_mode ? { chat_mode: described.chat_mode } : {}),
-      ...(described?.peer_user_id ? { peer_user_id: described.peer_user_id } : {}),
+      chat_mode: described.chat_mode,
+      ...(described.peer_user_id ? { peer_user_id: described.peer_user_id } : {}),
     };
   });
 }

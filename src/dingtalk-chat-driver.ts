@@ -254,17 +254,14 @@ export const dingtalkChatDriver: ChannelDriver = {
 
   async bindSyncSource(installation, host, env) {
     const selection = dingtalkSelection(installation.config);
-    if (selection === "pick") {
-      const ids = dingtalkPickedConversationIds(installation.config);
-      const names = pickedConversationNames(installation.config, ids);
-      return createDingTalkPickedSyncSource(
-        ids.map((conversation_id, index) => ({
-          conversation_id,
-          name: names[index],
-        })),
-      );
-    }
     const client = await clientFor(env);
+    if (selection === "pick") {
+      const conversations = await resolveDingTalkConversationTargets(
+        installation.config,
+        client,
+      );
+      return createDingTalkPickedSyncSource(conversations);
+    }
     const kinds = dingtalkKinds(installation.config);
     if (selection === "recent") {
       return createDingTalkRecentSyncSource(client, kinds);
@@ -284,6 +281,10 @@ export const dingtalkChatDriver: ChannelDriver = {
       host.get("connectors").listStreams(installation.id),
     ).find((conversation) => conversation.conversation_id === thread.target);
     const described = client.describeConversation(thread.target);
+    const picked = dingtalkSelection(installation.config) === "pick"
+      ? (await resolveDingTalkConversationTargets(installation.config, client))
+        .find((conversation) => conversation.conversation_id === thread.target)
+      : undefined;
     const streams = await mountConversations(
       host,
       installation,
@@ -292,10 +293,12 @@ export const dingtalkChatDriver: ChannelDriver = {
           conversation_id: thread.target,
           name:
             conversationName(installation.config, thread.target) ??
+            picked?.name ??
             mounted?.name ??
             described?.name,
-          chat_mode: mounted?.chat_mode ?? described?.chat_mode,
-          peer_user_id: mounted?.peer_user_id ?? described?.peer_user_id,
+          chat_mode: picked?.chat_mode ?? mounted?.chat_mode ?? described?.chat_mode,
+          peer_user_id:
+            picked?.peer_user_id ?? mounted?.peer_user_id ?? described?.peer_user_id,
         },
       ],
       client,
@@ -410,19 +413,15 @@ export const dingtalkChatDriver: ChannelDriver = {
 
   async listCatalogFieldOptions({ env }) {
     const client = dwsClientFor({ env });
-    try {
-      const conversations = await client.listAllConversations();
-      return {
-        conversation_ids: conversations.map((conversation) => ({
-          value: conversation.conversation_id,
-          label: conversation.name?.trim() || conversation.conversation_id,
-          kind: conversation.chat_mode === "p2p" ? "p2p" : "group",
-          title: conversation.name?.trim() || undefined,
-        })),
-      };
-    } catch {
-      return { conversation_ids: [] };
-    }
+    const conversations = await client.listAllConversations();
+    return {
+      conversation_ids: conversations.map((conversation) => ({
+        value: conversation.conversation_id,
+        label: conversation.name?.trim() || conversation.conversation_id,
+        kind: conversation.chat_mode === "p2p" ? "p2p" : "group",
+        title: conversation.name?.trim() || undefined,
+      })),
+    };
   },
 
   async probeCatalog({ env }) {

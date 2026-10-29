@@ -305,7 +305,7 @@ export async function probeDwsAuth(options: DwsRunOptions = {}): Promise<DwsAuth
     if (isDwsMissing(error)) {
       return { installed: false, authenticated: false };
     }
-    return { installed: true, authenticated: false };
+    throw error;
   }
 }
 
