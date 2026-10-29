@@ -88,28 +88,31 @@ async function fillPickedConversations(
   const ids = dingtalkPickedConversationIds(config);
   const names = pickedConversationNames(config, ids);
   const cached = ids.map((conversationId) => client.describeConversation(conversationId));
-  const needsDirectory = cached.some(
-    (conversation) =>
-      !conversation?.chat_mode ||
-      (conversation.chat_mode === "p2p" && !conversation.peer_user_id),
+  const needsRouting = (conversation: DingTalkConversation | undefined) =>
+    !conversation?.chat_mode ||
+    (conversation.chat_mode === "p2p" && !conversation.peer_user_id?.trim());
+  const recent = cached.some(needsRouting) ? await client.listRecentConversations() : [];
+  const known = cached.filter((conversation): conversation is DingTalkConversation => Boolean(conversation));
+  const withRecent = new Map(
+    mergeConversations(known, recent).map((conversation) => [conversation.conversation_id, conversation]),
   );
+  const needsDirectory = ids.some((id) => needsRouting(withRecent.get(id)));
   const directory = needsDirectory ? await client.listAllConversations() : [];
   const listed = new Map(
-    directory.map((conversation) => [conversation.conversation_id, conversation]),
+    mergeConversations(mergeConversations(known, directory), recent)
+      .map((conversation) => [conversation.conversation_id, conversation]),
   );
 
   return ids.map((conversationId, index) => {
-    const listedConversation = listed.get(conversationId);
-    const described = mergeConversations(
-      cached[index] ? [cached[index]!] : [],
-      listedConversation ? [listedConversation] : [],
-    )[0];
-    if (
-      !described?.chat_mode ||
-      (described.chat_mode === "p2p" && !described.peer_user_id)
-    ) {
+    const described = listed.get(conversationId);
+    if (described?.chat_mode === "p2p" && !described.peer_user_id?.trim()) {
       throw new Error(
-        `Unable to resolve routing details for selected DingTalk conversation "${conversationId}"`,
+        "Unsupported selected DingTalk direct conversation: dws discovery did not provide recipient routing (peer user ID); cannot read history or send",
+      );
+    }
+    if (!described?.chat_mode) {
+      throw new Error(
+        "Unable to resolve routing details for selected DingTalk conversation: dws discovery did not establish direct/group mode",
       );
     }
     const name = names[index] || described?.name;

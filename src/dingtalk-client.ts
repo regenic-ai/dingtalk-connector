@@ -105,15 +105,10 @@ export class DwsCliClient implements DingTalkImClient {
   constructor(private readonly options: DwsRunOptions = {}) {}
 
   async listMessages(input: DingTalkHistoryRequest): Promise<DingTalkHistoryPage> {
-    const described = this.describeConversation(input.conversation_id);
-    const chatMode = input.chat_mode ?? described?.chat_mode;
-    const peerUserId = input.peer_user_id ?? described?.peer_user_id;
     const args = [
       "chat",
       "+chat-messages",
-      ...(chatMode === "p2p" && peerUserId
-        ? ["--user", peerUserId]
-        : ["--group", input.conversation_id]),
+      ...this.routingArgs(input),
       "--no-reactions",
       "--direction",
       input.direction,
@@ -167,18 +162,13 @@ export class DwsCliClient implements DingTalkImClient {
     text: string;
     idempotency_key?: string;
   }): Promise<DingTalkSendResult> {
-    const described = this.describeConversation(input.conversation_id);
-    const chatMode = input.chat_mode ?? described?.chat_mode;
-    const peerUserId = input.peer_user_id ?? described?.peer_user_id;
     const key = input.idempotency_key?.trim() || randomUUID();
     const args = [
       "chat",
       "+messages-send",
       "--as",
       "user",
-      ...(chatMode === "p2p" && peerUserId
-        ? ["--user", peerUserId]
-        : ["--group", input.conversation_id]),
+      ...this.routingArgs(input),
       "--text",
       input.text,
       "--idempotency-key",
@@ -274,6 +264,25 @@ export class DwsCliClient implements DingTalkImClient {
       ...(input.timeout_ms ? { timeout_ms: input.timeout_ms } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     };
+  }
+
+  private routingArgs(input: {
+    conversation_id: string;
+    chat_mode?: DingTalkChatMode;
+    peer_user_id?: string;
+  }): string[] {
+    const described = this.describeConversation(input.conversation_id);
+    const chatMode = input.chat_mode ?? described?.chat_mode;
+    const peerUserId = (input.peer_user_id ?? described?.peer_user_id)?.trim();
+    if (chatMode === "p2p") {
+      if (!peerUserId) {
+        throw new DingTalkCliError(
+          "Unsupported DingTalk direct conversation: missing recipient routing (peer user ID); cannot read history or send",
+        );
+      }
+      return ["--user", peerUserId];
+    }
+    return ["--group", input.conversation_id];
   }
 
   private remember(conversations: DingTalkConversation[]): DingTalkConversation[] {
@@ -494,7 +503,8 @@ function readConversations(
     if (kinds && chatMode && !kinds.includes(chatMode)) {
       return [];
     }
-    const name = stringValue(record.title) ?? stringValue(record.name) ?? stringValue(record.conversationTitle);
+    const name = stringValue(record.title) ?? stringValue(record.name)
+      ?? stringValue(record.conversationTitle) ?? stringValue(record.conversationName);
     const peer = stringValue(record.peerUserId)
       ?? stringValue(record.peerId)
       ?? stringValue(record.targetUserId)

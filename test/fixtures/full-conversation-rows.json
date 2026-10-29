@@ -1,0 +1,4 @@
+[
+  { "openConversationId": "fixture-group-1", "conversationName": "Fixture group 1" },
+  { "openConversationId": "fixture-direct", "conversationName": "Fixture direct" }
+]
